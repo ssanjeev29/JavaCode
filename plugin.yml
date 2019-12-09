@@ -1,0 +1,122 @@
+.plugin-java-functions: &plugin-java-functions |
+  # Java plugin function definitions
+
+  function detect_project_type() {
+    local project_type
+    
+    if [[ -f "$ROOT_DIR/pom.xml" ]]; then
+      if [[ -f "$ROOT_DIR/mvnw" ]]; then
+        project_type="maven-wrapper"
+      else
+        project_type="maven"
+      fi
+    elif [[ -f "$ROOT_DIR/build.gradle" ]]; then
+      if [[ -f "$ROOT_DIR/gradlew" ]]; then
+        project_type="gradle-wrapper"
+      else
+        project_type="gradle"
+      fi
+    else
+      log_error "Unable to detect project type."
+      exit 1
+    fi
+    
+    echo "$project_type"
+  }
+  
+  function setup_environment() {
+    local -r default_gradle_opts="-Dorg.gradle.daemon=false -Dorg.gradle.parallel=true"
+    local -r default_maven_opts="-Dhttps.protocols=TLSv1.2 -Dmaven.repo.local=$CI_PROJECT_DIR/.m2/repository -Dorg.slf4j.simpleLogger.log.org.apache.maven.cli.transfer.Slf4jMavenTransferListener=WARN -Dorg.slf4j.simpleLogger.showDateTime=true -Djava.awt.headless=true"
+    
+    export GRADLE_USER_HOME=${GRADLE_USER_HOME:-$default_gradle_user_home}
+    export GRADLE_OPTS=${GRADLE_OPTS:-$default_gradle_opts}
+    export MAVEN_OPTS=${MAVEN_OPTS:-$default_maven_opts}
+  }
+
+  function build() {
+    local project_type
+    project_type=$(detect_project_type)
+
+    setup_environment
+
+    cd $ROOT_DIR
+
+    case "$project_type" in
+      maven)
+        build_maven "mvn"
+        ;;
+      maven-wrapper)
+        build_maven "./mvnw"
+        ;;
+      gradle)
+        build_gradle "gradle"
+        ;;
+      gradle-wrapper)
+        build_gradle "./gradlew"
+        ;;
+      *)
+        log_error "Unsupported project type: $project_type"
+        exit 1
+    esac
+  }
+  
+  function build_maven() {
+    local -r mvn="$1"
+    $mvn --version
+    $mvn install -DskipTests=true -Dmaven.javadoc.skip=true --batch-mode --show-version --update-snapshots
+    $mvn test --batch-mode
+  }
+  
+  function build_gradle() {
+    local -r gradle="$1"
+    $gradle --version
+    $gradle assemble
+    $gradle check
+
+    # Prevent Gradle invalidating the cache on every build
+    # https://medium.com/cirruslabs/mastering-gradle-caching-and-incremental-builds-37eb1af7fcde
+    rm -rf $GRADLE_USER_HOME/caches/journal-1/file-access.*
+    find $GRADLE_USER_HOME/caches/ -name "*.lock" -type f -delete
+    find $GRADLE_USER_HOME/caches/ -mindepth 1 -maxdepth 1 -regex ".*/[0-9]+\.[0-9]+\.[0-9]+" -type d -exec rm -r "{}" \;
+  }
+
+  # Log the given message at the given level. All logs are written to stderr with a timestamp.
+  function log {
+    local -r level="$1"
+    local -r message="$2"
+    local -r timestamp=$(date +"%Y-%m-%d %H:%M:%S")
+    local -r script_name="$(basename "$0")"
+    >&2 echo -e "${timestamp} [${level}] [$script_name] ${message}"
+  }
+  
+  # Log the given message at INFO level. All logs are written to stderr with a timestamp.
+  function log_info {
+    local -r message="$1"
+    log "INFO" "$message"
+  }
+  
+  # Log the given message at WARN level. All logs are written to stderr with a timestamp.
+  function log_warn {
+    local -r message="$1"
+    log "WARN" "$message"
+  }
+  
+  # Log the given message at ERROR level. All logs are written to stderr with a timestamp.
+  function log_error {
+    local -r message="$1"
+    log "ERROR" "$message"
+  }
+
+.plugin-java:
+  image: openjdk:8u212-jdk-stretch
+  variables:
+    ROOT_DIR: $CI_PROJECT_DIR
+    GRADLE_USER_HOME: $CI_PROJECT_DIR/.gradle
+  script:
+    - *plugin-java-functions
+    - build
+  cache:
+    paths:
+      - $CI_PROJECT_DIR/.gradle/wrapper
+      - $CI_PROJECT_DIR/.gradle/caches
+      - $CI_PROJECT_DIR/.m2/repository

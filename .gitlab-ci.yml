@@ -1,0 +1,10 @@
+include:
+  - local: plugin.yml
+
+test-examples/simple-java-maven-app:
+  extends: .plugin-java
+  image: maven:3.6.1-jdk-8
+  cache:
+    key: simple-java-maven-app
+  variables:
+    ROOT_DIR: examples/simple-java-maven-app
